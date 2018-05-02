@@ -1,7 +1,17 @@
 [package]
 name = "slog-loggly"
 version = "0.1.1"
-authors = ["Ondrej Perutka <ondrej.perutka@angelcam.com>"]
+authors = ["Angelcam, Inc."]
+license = "MIT/Apache-2.0"
+readme = "README.md"
+repository = "https://github.com/angelcam/rust-slog-loggly"
+documentation = "https://docs.rs/slog-loggly"
+homepage = "https://github.com/angelcam/rust-slog-loggly"
+description = """
+This is an unofficial Loggly drain for the slog logging infrastructure in Rust.
+"""
+categories = ["development-tools::debugging"]
+keywords = ["logging", "slog"]
 
 [dependencies]
 bytes      = "0.4.6"
