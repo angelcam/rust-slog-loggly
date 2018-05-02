@@ -11,7 +11,7 @@ description = """
 This is an unofficial Loggly drain for the slog logging infrastructure in Rust.
 """
 categories = ["development-tools::debugging"]
-keywords = ["logging", "slog"]
+keywords = ["logging", "slog", "loggly"]
 
 [dependencies]
 bytes      = "0.4.6"
