@@ -7,7 +7,6 @@ use std::fmt::Write;
 
 use bytes::Bytes;
 
-use serde;
 use serde_json;
 
 use slog;
@@ -19,31 +18,31 @@ thread_local! {
     static TL_BUFFER_POOL: RefCell<BufferPool> = RefCell::new(BufferPool::new());
 }
 
-/// A simple pool of byte vectors. It's used to avoid excessive allocations
+/// A simple pool of string buffers. It's used to avoid excessive allocations
 /// when serializing JSON messages.
 struct BufferPool {
-    buffers: Vec<Vec<u8>>,
+    buffers: Vec<String>,
 }
 
 impl BufferPool {
-    /// Create a new empty pool of byte vectors.
+    /// Create a new empty pool of string buffers.
     fn new() -> BufferPool {
         BufferPool {
             buffers: Vec::new(),
         }
     }
 
-    /// Take a byte vector (if available) or create a new one.
-    fn take(&mut self) -> Vec<u8> {
+    /// Take a string buffer (if available) or create a new one.
+    fn take(&mut self) -> String {
         if let Some(buffer) = self.buffers.pop() {
             buffer
         } else {
-            Vec::new()
+            String::new()
         }
     }
 
-    /// Put back a given byte vector.
-    fn put_back(&mut self, mut buffer: Vec<u8>) {
+    /// Put back a given string buffer.
+    fn put_back(&mut self, mut buffer: String) {
         // we need to clear the buffer first
         buffer.clear();
 
@@ -53,7 +52,7 @@ impl BufferPool {
 
 /// Slog serializer for constructing Loggly messages.
 pub struct LogglyMessageSerializer {
-    map: HashMap<Key, String>,
+    map: HashMap<Key, serde_json::Value>,
 }
 
 impl LogglyMessageSerializer {
@@ -73,7 +72,9 @@ impl LogglyMessageSerializer {
             let mut bpool = pool.borrow_mut();
 
             for (_, value) in self.map.into_iter() {
-                bpool.put_back(value.into_bytes());
+                if let serde_json::Value::String(buffer) = value {
+                    bpool.put_back(buffer);
+                }
             }
         });
 
@@ -82,106 +83,120 @@ impl LogglyMessageSerializer {
         Ok(res)
     }
 
-    /// Emit a given key-value pair.
-    fn emit<V>(&mut self, key: Key, value: &V) -> slog::Result
-    where
-        V: serde::Serialize,
-    {
-        let mut buffer = TL_BUFFER_POOL.with(|pool| pool.borrow_mut().take());
-
-        if let Err(_) = serde_json::to_writer(&mut buffer, value) {
-            // put back the buffer if we were not able to serialize the value
-            TL_BUFFER_POOL.with(move |pool| {
-                pool.borrow_mut().put_back(buffer);
-            });
-
-            return Err(slog::Error::from(io::Error::new(
-                io::ErrorKind::Other,
-                "unable to serialize a log message entry value",
-            )));
-        }
-
-        // this is safe because the serialized JSON is a valid UTF-8 string
-        let value = unsafe { String::from_utf8_unchecked(buffer) };
-
-        if let Some(old) = self.map.insert(key, value) {
+    /// Emit a given serde_json::Value key-value pair.
+    fn emit_serde_json_value(&mut self, key: Key, val: serde_json::Value) -> slog::Result {
+        if let Some(serde_json::Value::String(old)) = self.map.insert(key, val) {
             // put back the old buffer if there is one
             TL_BUFFER_POOL.with(move |pool| {
-                pool.borrow_mut().put_back(old.into_bytes());
+                pool.borrow_mut().put_back(old);
             });
         }
 
         Ok(())
     }
+
+    /// Emit a null key-value pair.
+    fn emit_serde_json_null(&mut self, key: Key) -> slog::Result {
+        self.emit_serde_json_value(key, serde_json::Value::Null)
+    }
+
+    /// Emit a boolean key-value pair.
+    fn emit_serde_json_bool(&mut self, key: Key, val: bool) -> slog::Result {
+        self.emit_serde_json_value(key, serde_json::Value::Bool(val))
+    }
+
+    /// Emit a numeric key-value pair.
+    fn emit_serde_json_number<V>(&mut self, key: Key, value: V) -> slog::Result
+    where
+        serde_json::Number: From<V>,
+    {
+        // convert a given number into serde_json::Number
+        let num = serde_json::Number::from(value);
+
+        self.emit_serde_json_value(key, serde_json::Value::Number(num))
+    }
+
+    /// Emit a string key-value pair.
+    fn emit_serde_json_string(&mut self, key: Key, val: &str) -> slog::Result {
+        let mut buffer = TL_BUFFER_POOL.with(|pool| pool.borrow_mut().take());
+
+        buffer.push_str(val);
+
+        self.emit_serde_json_value(key, serde_json::Value::String(buffer))
+    }
 }
 
 impl slog::Serializer for LogglyMessageSerializer {
     fn emit_bool(&mut self, key: Key, val: bool) -> slog::Result {
-        self.emit(key, &val)
+        self.emit_serde_json_bool(key, val)
     }
 
     fn emit_unit(&mut self, key: Key) -> slog::Result {
-        self.emit(key, &())
+        self.emit_serde_json_null(key)
     }
 
     fn emit_char(&mut self, key: Key, val: char) -> slog::Result {
-        self.emit(key, &val)
+        self.emit_arguments(key, &format_args!("{}", val))
     }
 
     fn emit_none(&mut self, key: Key) -> slog::Result {
-        self.emit(key, &None as &Option<()>)
+        self.emit_serde_json_null(key)
     }
 
     fn emit_u8(&mut self, key: Key, val: u8) -> slog::Result {
-        self.emit(key, &val)
+        self.emit_serde_json_number(key, val)
     }
 
     fn emit_i8(&mut self, key: Key, val: i8) -> slog::Result {
-        self.emit(key, &val)
+        self.emit_serde_json_number(key, val)
     }
 
     fn emit_u16(&mut self, key: Key, val: u16) -> slog::Result {
-        self.emit(key, &val)
+        self.emit_serde_json_number(key, val)
     }
 
     fn emit_i16(&mut self, key: Key, val: i16) -> slog::Result {
-        self.emit(key, &val)
+        self.emit_serde_json_number(key, val)
     }
 
     fn emit_usize(&mut self, key: Key, val: usize) -> slog::Result {
-        self.emit(key, &val)
+        self.emit_serde_json_number(key, val)
     }
 
     fn emit_isize(&mut self, key: Key, val: isize) -> slog::Result {
-        self.emit(key, &val)
+        self.emit_serde_json_number(key, val)
     }
 
     fn emit_u32(&mut self, key: Key, val: u32) -> slog::Result {
-        self.emit(key, &val)
+        self.emit_serde_json_number(key, val)
     }
 
     fn emit_i32(&mut self, key: Key, val: i32) -> slog::Result {
-        self.emit(key, &val)
+        self.emit_serde_json_number(key, val)
     }
 
     fn emit_f32(&mut self, key: Key, val: f32) -> slog::Result {
-        self.emit(key, &val)
+        self.emit_f64(key, val as f64)
     }
 
     fn emit_u64(&mut self, key: Key, val: u64) -> slog::Result {
-        self.emit(key, &val)
+        self.emit_serde_json_number(key, val)
     }
 
     fn emit_i64(&mut self, key: Key, val: i64) -> slog::Result {
-        self.emit(key, &val)
+        self.emit_serde_json_number(key, val)
     }
 
     fn emit_f64(&mut self, key: Key, val: f64) -> slog::Result {
-        self.emit(key, &val)
+        if let Some(num) = serde_json::Number::from_f64(val) {
+            self.emit_serde_json_value(key, serde_json::Value::Number(num))
+        } else {
+            self.emit_serde_json_null(key)
+        }
     }
 
     fn emit_str(&mut self, key: Key, val: &str) -> slog::Result {
-        self.emit(key, &val)
+        self.emit_serde_json_string(key, val)
     }
 
     fn emit_arguments(&mut self, key: Key, val: &fmt::Arguments) -> slog::Result {
@@ -190,17 +205,12 @@ impl slog::Serializer for LogglyMessageSerializer {
 
             buf.write_fmt(*val).unwrap();
 
-            let res = self.emit(key, &*buf);
+            let res = self.emit_serde_json_string(key, &*buf);
 
             buf.clear();
 
             res
         })
-    }
-
-    #[cfg(feature = "nested-values")]
-    fn emit_serde(&mut self, key: Key, value: &slog::SerdeValue) -> slog::Result {
-        self.emit(key, val.as_serde())
     }
 }
 
@@ -223,7 +233,7 @@ mod tests {
 
         let mut expected = HashMap::new();
 
-        expected.insert(Key::from("key"), true.to_string());
+        expected.insert(Key::from("key"), serde_json::Value::Bool(true));
 
         assert_eq!(serializer.map, expected);
     }
@@ -254,5 +264,51 @@ mod tests {
         let buffers = TL_BUFFER_POOL.with(|pool| pool.borrow().buffers.len());
 
         assert_eq!(buffers, 3);
+    }
+
+    /// Test that different types are serialized correctly.
+    #[test]
+    fn test_serialized_values() {
+        // test string serialization
+        let mut serializer = LogglyMessageSerializer::new();
+        serializer.emit_str(Key::from("key"), "val").unwrap();
+        let result = serializer.finish().unwrap();
+        let result = String::from_utf8(result.to_vec()).unwrap();
+        assert_eq!(&result, "{\"key\":\"val\"}");
+
+        // test char serialization
+        let mut serializer = LogglyMessageSerializer::new();
+        serializer.emit_char(Key::from("key"), 'v').unwrap();
+        let result = serializer.finish().unwrap();
+        let result = String::from_utf8(result.to_vec()).unwrap();
+        assert_eq!(&result, "{\"key\":\"v\"}");
+
+        // test null serialization
+        let mut serializer = LogglyMessageSerializer::new();
+        serializer.emit_unit(Key::from("key")).unwrap();
+        let result = serializer.finish().unwrap();
+        let result = String::from_utf8(result.to_vec()).unwrap();
+        assert_eq!(&result, "{\"key\":null}");
+
+        // test bool serialization
+        let mut serializer = LogglyMessageSerializer::new();
+        serializer.emit_bool(Key::from("key"), true).unwrap();
+        let result = serializer.finish().unwrap();
+        let result = String::from_utf8(result.to_vec()).unwrap();
+        assert_eq!(&result, "{\"key\":true}");
+
+        // test integer serialization
+        let mut serializer = LogglyMessageSerializer::new();
+        serializer.emit_i32(Key::from("key"), -5).unwrap();
+        let result = serializer.finish().unwrap();
+        let result = String::from_utf8(result.to_vec()).unwrap();
+        assert_eq!(&result, "{\"key\":-5}");
+
+        // test float serialization
+        let mut serializer = LogglyMessageSerializer::new();
+        serializer.emit_f64(Key::from("key"), 1.0).unwrap();
+        let result = serializer.finish().unwrap();
+        let result = String::from_utf8(result.to_vec()).unwrap();
+        assert_eq!(&result, "{\"key\":1.0}");
     }
 }
