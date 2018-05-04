@@ -186,6 +186,10 @@ impl LogglyDrainBuilder {
     }
 
     /// Maximum number of messages sent in one batch (the default is 20).
+    /// Please note that all log messages are sent as soon as possible.
+    /// Increasing batch size won't cause any delays in sending messages. If
+    /// there is not enough messages in the internal queue to make a maximum
+    /// size batch, a smaller batch is sent.
     pub fn batch_size(mut self, size: usize) -> LogglyDrainBuilder {
         self.batch_size = size;
         self
