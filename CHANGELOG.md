@@ -1,3 +1,7 @@
+## Not released yet
+
+* Fix duplicate keys in the JSON message
+
 ## v0.1.1 (2018-05-02)
 
 * Add debug mode

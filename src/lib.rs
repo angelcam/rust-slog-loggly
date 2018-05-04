@@ -1,5 +1,16 @@
 //! A Rust library providing an slog drain for sending log messages to Loggly.
 //!
+//! # Things to be aware of
+//!
+//! The drain serializes all log messages as JSON objects. If you use key-value
+//! pairs in your loggers and log messages, you should know that one key-value
+//! pair can override another if they both have the same key. The overrides
+//! follow this simple rule:
+//! 1. Derived loggers can override key-value pairs of their ancestors.
+//! 2. Log messages can override key-value pairs of their loggers.
+//! 3. The latest specified key-value pair overrides everything specified
+//!    before.
+//!
 //! # Usage
 //!
 //! Please note that the Loggly drain is asynchronous and the log messages are
@@ -320,30 +331,22 @@ impl Drain for LogglyDrain {
 
 /// Serialize a given log record as as a Loggly JSON string.
 fn serialize(record: &Record, logger_values: &OwnedKVList) -> slog::Result<Bytes> {
-    let message = Vec::new();
+    let mut serializer = LogglyMessageSerializer::new();
 
-    let mut json_serializer = serde_json::Serializer::new(message);
+    let level = record.level().as_str().to_lowercase();
 
-    {
-        let mut loggly_serializer = LogglyMessageSerializer::new(&mut json_serializer)?;
+    let file = record.file();
+    let line = record.line();
 
-        let level = record.level().as_str().to_lowercase();
+    serializer.emit_str("level", &level)?;
+    serializer.emit_arguments("file", &format_args!("{}:{}", file, line))?;
+    serializer.emit_arguments("message", record.msg())?;
 
-        let file = record.file();
-        let line = record.line();
+    logger_values.serialize(record, &mut serializer)?;
 
-        loggly_serializer.emit_str("level", &level)?;
-        loggly_serializer.emit_arguments("file", &format_args!("{}:{}", file, line))?;
-        loggly_serializer.emit_arguments("message", record.msg())?;
+    record.kv().serialize(record, &mut serializer)?;
 
-        logger_values.serialize(record, &mut loggly_serializer)?;
+    let message = serializer.finish()?;
 
-        record.kv().serialize(record, &mut loggly_serializer)?;
-
-        loggly_serializer.finish()?;
-    }
-
-    let message = json_serializer.into_inner();
-
-    Ok(Bytes::from(message))
+    Ok(message)
 }
