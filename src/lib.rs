@@ -1,5 +1,16 @@
 //! A Rust library providing an slog drain for sending log messages to Loggly.
 //!
+//! # Things to be aware of
+//!
+//! The drain serializes all log messages as JSON objects. If you use key-value
+//! pairs in your loggers and log messages, you should know that one key-value
+//! pair can override another if they both have the same key. The overrides
+//! follow this simple rule:
+//! 1. Derived loggers can override key-value pairs of their ancestors.
+//! 2. Log messages can override key-value pairs of their loggers.
+//! 3. The latest specified key-value pair overrides everything specified
+//!    before.
+//!
 //! # Usage
 //!
 //! Please note that the Loggly drain is asynchronous and the log messages are
