@@ -1,4 +1,4 @@
-## Not released yet
+## v0.2.0 (2018-05-09)
 
 * Fix duplicate keys in the JSON message
 * Add API for flushing the drain
