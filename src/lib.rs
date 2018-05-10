@@ -398,6 +398,7 @@ fn serialize(record: &Record, logger_values: &OwnedKVList) -> slog::Result<Bytes
 }
 
 /// A flush handle that can be used to flush all currently queued log messages.
+#[derive(Clone)]
 pub struct FlushHandle {
     sender: Sender<Bytes>,
 }
