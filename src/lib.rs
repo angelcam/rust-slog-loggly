@@ -139,9 +139,9 @@ use channel::{Receiver, Sender};
 
 use client::LogglyClient;
 
-pub use error::Error;
-
 use serializer::LogglyMessageSerializer;
+
+pub use error::Error;
 
 pub use channel::Flush;
 

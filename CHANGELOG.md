@@ -1,3 +1,8 @@
+## v0.2.1 (2018-05-10)
+
+* Make the Error struct public
+* Implement Clone for the FlushHandle
+
 ## v0.2.0 (2018-05-09)
 
 * Fix duplicate keys in the JSON message
