@@ -2,7 +2,7 @@ use std;
 
 use std::fmt::{Display, Formatter};
 
-/// LogglyDrain error.
+/// Error.
 #[derive(Debug, Clone)]
 pub struct Error {
     msg: String,

@@ -139,7 +139,7 @@ use channel::{Receiver, Sender};
 
 use client::LogglyClient;
 
-use error::Error;
+pub use error::Error;
 
 use serializer::LogglyMessageSerializer;
 
