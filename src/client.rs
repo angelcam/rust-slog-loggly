@@ -75,7 +75,10 @@ impl LogglyClientBuilder {
             })?;
         }
 
-        let client = Client::configure().connector(connector).build(handle);
+        let client = Client::configure()
+            .retry_canceled_requests(false)
+            .connector(connector)
+            .build(handle);
 
         let url = format!(
             "https://logs-01.loggly.com/bulk/{}/tag/{}/",
