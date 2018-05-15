@@ -76,8 +76,9 @@ impl LogglyClientBuilder {
         }
 
         let client = Client::configure()
-            .retry_canceled_requests(false)
             .connector(connector)
+            .keep_alive(false)
+            .retry_canceled_requests(false)
             .build(handle);
 
         let url = format!(
