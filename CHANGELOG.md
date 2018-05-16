@@ -1,3 +1,8 @@
+## v0.2.2 (2018-05-16)
+
+* Disable keep alive (Hyper client)
+* Disable request retry (Hyper client)
+
 ## v0.2.1 (2018-05-10)
 
 * Make the Error struct public
