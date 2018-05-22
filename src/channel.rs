@@ -280,8 +280,17 @@ impl<T> Stream for Queue<T> {
     fn poll(&mut self) -> Poll<Option<Message<T>>, ()> {
         // get rid of all flush handles at front if there is nothing in flight
         if self.in_flight.is_empty() {
-            while let Some(QueueItem::Flush(mut handle)) = self.pending.pop_front() {
-                handle.resolve(Ok(()));
+            while let Some(item) = self.pending.pop_front() {
+                if let QueueItem::Message(msg) = item {
+                    // put the message back, we don't want to lose it
+                    self.pending.push_front(QueueItem::Message(msg));
+
+                    break;
+                } else if let QueueItem::Flush(mut handle) = item {
+                    handle.resolve(Ok(()));
+                } else {
+                    panic!("unhandled QueueItem variant");
+                }
             }
         }
 

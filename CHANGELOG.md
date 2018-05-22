@@ -1,3 +1,7 @@
+## v0.2.3 (2018-05-22)
+
+* Fix an issue with disappearing messages
+
 ## v0.2.2 (2018-05-16)
 
 * Disable keep alive (Hyper client)
