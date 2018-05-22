@@ -1,5 +1,5 @@
-use futures::{Async, Poll, Stream};
 use futures::stream::Fuse;
+use futures::{Async, Poll, Stream};
 
 /// A simple extension to the futures::Stream allowing to take elements in
 /// batches of a given maximum size.

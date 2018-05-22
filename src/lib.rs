@@ -128,8 +128,8 @@ use hyper::client::HttpConnector;
 
 use hyper_tls::HttpsConnector;
 
-use slog::{Drain, OwnedKVList, Record, KV};
 use slog::Serializer as SlogSerializer;
+use slog::{Drain, OwnedKVList, Record, KV};
 
 use tokio_core::reactor::{Core, Handle};
 

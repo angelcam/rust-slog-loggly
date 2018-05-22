@@ -216,8 +216,8 @@ impl slog::Serializer for LogglyMessageSerializer {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
     use slog::{Key, Serializer};
+    use std::collections::HashMap;
 
     use super::*;
 

@@ -3,8 +3,8 @@ use std::sync::{Arc, Mutex};
 
 use futures::task;
 
-use futures::{Async, Future, Poll, Stream};
 use futures::task::Task;
+use futures::{Async, Future, Poll, Stream};
 
 use error::Error;
 

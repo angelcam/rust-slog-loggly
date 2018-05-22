@@ -6,9 +6,9 @@ use futures;
 
 use futures::{Future, Stream};
 
-use hyper::{Client, Method, Request, Uri};
 use hyper::client::HttpConnector;
 use hyper::header::ContentType;
+use hyper::{Client, Method, Request, Uri};
 
 use hyper_tls::HttpsConnector;
 
