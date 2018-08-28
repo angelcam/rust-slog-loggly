@@ -14,11 +14,7 @@ pub trait BatchStream {
     }
 }
 
-impl<T> BatchStream for T
-where
-    T: Stream,
-{
-}
+impl<T> BatchStream for T where T: Stream {}
 
 /// Batch combinator.
 pub struct Batch<S> {

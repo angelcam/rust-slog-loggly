@@ -19,7 +19,8 @@ fn main() {
     // Create a custom Loggly drain.
     let (drain, mut fhandle) = LogglyDrain::builder(loggly_token, loggly_tag)
         .debug_mode(true)
-        .spawn_thread();
+        .spawn_thread()
+        .unwrap();
 
     // Create a logger.
     let logger = Logger::root(drain.fuse(), o!());
