@@ -1,4 +1,4 @@
-## Not released yet
+## v0.3.0 (2018-08-29)
 
 * Switch to Hyper 0.12.x and the new tokio
 
