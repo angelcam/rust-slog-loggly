@@ -40,7 +40,7 @@ impl LogglyClientBuilder {
         LogglyClientBuilder {
             token: token.to_string(),
             tag: tag.to_string(),
-            request_timeout: request_timeout,
+            request_timeout,
             debug: false,
             connector: None,
         }
@@ -87,14 +87,14 @@ impl LogglyClientBuilder {
         );
         let url = url
             .parse()
-            .map_err(|_| Error::from(format!("unable to parse Loggly URL")))?;
+            .map_err(|_| Error::from("unable to parse Loggly URL"))?;
         let url = Arc::new(url);
 
         let res = LogglyClient {
-            url: url,
+            url,
             timeout: self.request_timeout,
             debug: self.debug,
-            client: client,
+            client,
         };
 
         Ok(res)
@@ -125,7 +125,7 @@ impl LogglyClient {
 
         for msg in messages {
             batch.extend_from_slice(msg.as_ref());
-            batch.push('\n' as u8);
+            batch.push(b'\n');
         }
 
         self.send(Bytes::from(batch))

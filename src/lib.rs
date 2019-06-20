@@ -290,7 +290,7 @@ impl LogglyDrain {
     fn new(sender: Sender<Bytes>, debug: bool) -> LogglyDrain {
         LogglyDrain {
             sender: Mutex::new(sender),
-            debug: debug,
+            debug,
         }
     }
 
@@ -366,7 +366,7 @@ pub struct FlushHandle {
 impl FlushHandle {
     /// Create a new FlushHandle.
     fn new(sender: Sender<Bytes>) -> FlushHandle {
-        FlushHandle { sender: sender }
+        FlushHandle { sender }
     }
 
     /// Flush all currently queued log messages. The method returns a future

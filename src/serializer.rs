@@ -176,7 +176,7 @@ impl slog::Serializer for LogglyMessageSerializer {
     }
 
     fn emit_f32(&mut self, key: Key, val: f32) -> slog::Result {
-        self.emit_f64(key, val as f64)
+        self.emit_f64(key, f64::from(val))
     }
 
     fn emit_u64(&mut self, key: Key, val: u64) -> slog::Result {

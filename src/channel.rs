@@ -32,7 +32,7 @@ struct FlushResolver {
 impl FlushResolver {
     /// Create a new FlushResolver with a given shared context.
     fn new(context: Arc<Mutex<FlushContext>>) -> FlushResolver {
-        FlushResolver { context: context }
+        FlushResolver { context }
     }
 
     /// Resolve the future with a given result.
@@ -55,7 +55,7 @@ pub struct Flush {
 impl Flush {
     /// Create a new Flush future with a given context.
     fn new(context: Arc<Mutex<FlushContext>>) -> Flush {
-        Flush { context: context }
+        Flush { context }
     }
 }
 
@@ -68,7 +68,7 @@ impl Future for Flush {
 
         if let Some(res) = context.result.clone() {
             match res {
-                Ok(res) => Ok(Async::Ready(res)),
+                Ok(()) => Ok(Async::Ready(())),
                 Err(err) => Err(err),
             }
         } else {
@@ -91,7 +91,7 @@ impl<T> Message<T> {
     /// Create a new Message with a given message ID and payload.
     fn new(id: usize, payload: T) -> Message<T> {
         Message {
-            id: id,
+            id,
             payload: Some(payload),
             queue: None,
         }
@@ -130,10 +130,7 @@ pub struct MessageDeleteHandle<T> {
 impl<T> MessageDeleteHandle<T> {
     /// Create a new message delete handle.
     fn new(id: usize, queue: Option<Arc<Mutex<Queue<T>>>>) -> MessageDeleteHandle<T> {
-        MessageDeleteHandle {
-            id: id,
-            queue: queue,
-        }
+        MessageDeleteHandle { id, queue }
     }
 
     /// Delete the message. You should call this method once the message is
@@ -180,7 +177,7 @@ impl<T> Queue<T> {
         }
 
         Queue {
-            capacity: capacity,
+            capacity,
             messages: 0,
             pending: VecDeque::new(),
             in_flight: HashSet::new(),
@@ -330,7 +327,7 @@ pub struct Sender<T> {
 impl<T> Sender<T> {
     /// Create a new sender.
     fn new(queue: Arc<Mutex<Queue<T>>>) -> Sender<T> {
-        Sender { queue: queue }
+        Sender { queue }
     }
 
     /// Send a given message or return an error if the queue is full or if the
@@ -354,7 +351,7 @@ pub struct Receiver<T> {
 impl<T> Receiver<T> {
     /// Create a new receiver.
     fn new(queue: Arc<Mutex<Queue<T>>>) -> Receiver<T> {
-        Receiver { queue: queue }
+        Receiver { queue }
     }
 }
 

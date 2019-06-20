@@ -22,7 +22,7 @@ impl Display for Error {
 
 impl From<String> for Error {
     fn from(msg: String) -> Error {
-        Error { msg: msg }
+        Error { msg }
     }
 }
 
