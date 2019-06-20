@@ -1,3 +1,8 @@
+## v0.3.1 (2019-06-20)
+
+* Send event timestamp to Loggly to avoid event reordering
+* Switch to Rust 2018
+
 ## v0.3.0 (2018-08-29)
 
 * Switch to Hyper 0.12.x and the new tokio
