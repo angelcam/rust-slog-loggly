@@ -6,7 +6,7 @@ use futures::task;
 use futures::task::Task;
 use futures::{Async, Future, Poll, Stream};
 
-use error::Error;
+use crate::error::Error;
 
 /// Common context for Flush future and FlushResolver.
 struct FlushContext {

@@ -14,11 +14,11 @@ use hyper_tls::HttpsConnector;
 
 use tokio_timer::Timeout;
 
-use batch::BatchStream;
+use crate::batch::BatchStream;
 
-use channel::Message;
+use crate::channel::Message;
 
-use error::Error;
+use crate::error::Error;
 
 /// Default request timeout in seconds.
 const DEFAULT_REQUEST_TIMEOUT: u64 = 5;

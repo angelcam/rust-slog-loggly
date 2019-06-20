@@ -154,17 +154,17 @@ use hyper_tls::HttpsConnector;
 use slog::Serializer as SlogSerializer;
 use slog::{Drain, OwnedKVList, Record, KV};
 
-use channel::Sender;
+use crate::channel::Sender;
 
-use client::LogglyClient;
+use crate::client::LogglyClient;
 
-use serializer::LogglyMessageSerializer;
+use crate::serializer::LogglyMessageSerializer;
 
-pub use client::LogglyMessageSender;
+pub use crate::client::LogglyMessageSender;
 
-pub use error::Error;
+pub use crate::error::Error;
 
-pub use channel::Flush;
+pub use crate::channel::Flush;
 
 const DEFAULT_SENDER_COUNT: usize = 16;
 const DEFAULT_BATCH_SIZE: usize = 20;
