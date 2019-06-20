@@ -1,3 +1,7 @@
+## v0.3.2 (2019-06-20)
+
+* Fix the timestamp format
+
 ## v0.3.1 (2019-06-20)
 
 * Send event timestamp to Loggly to avoid event reordering

@@ -131,7 +131,7 @@ use std::time::Duration;
 
 use bytes::Bytes;
 
-use chrono::Utc;
+use chrono::{SecondsFormat, Utc};
 
 use hyper::client::HttpConnector;
 
@@ -350,7 +350,10 @@ fn serialize(record: &Record, logger_values: &OwnedKVList) -> slog::Result<Bytes
 
     let timestamp = Utc::now();
 
-    serializer.emit_str("timestamp", &timestamp.to_rfc3339())?;
+    serializer.emit_str(
+        "timestamp",
+        &timestamp.to_rfc3339_opts(SecondsFormat::Micros, true),
+    )?;
 
     let message = serializer.finish()?;
 
