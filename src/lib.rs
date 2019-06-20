@@ -116,6 +116,7 @@
 //! ```
 
 extern crate bytes;
+extern crate chrono;
 extern crate futures;
 extern crate hyper;
 extern crate hyper_tls;
@@ -143,6 +144,8 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use bytes::Bytes;
+
+use chrono::Utc;
 
 use hyper::client::HttpConnector;
 
@@ -358,6 +361,10 @@ fn serialize(record: &Record, logger_values: &OwnedKVList) -> slog::Result<Bytes
     logger_values.serialize(record, &mut serializer)?;
 
     record.kv().serialize(record, &mut serializer)?;
+
+    let timestamp = Utc::now();
+
+    serializer.emit_str("timestamp", &timestamp.to_rfc3339())?;
 
     let message = serializer.finish()?;
 
