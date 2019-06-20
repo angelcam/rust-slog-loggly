@@ -115,20 +115,6 @@
 //! }
 //! ```
 
-extern crate bytes;
-extern crate chrono;
-extern crate futures;
-extern crate hyper;
-extern crate hyper_tls;
-extern crate serde;
-extern crate serde_json;
-extern crate slog;
-
-#[cfg(feature = "runtime")]
-extern crate tokio;
-
-extern crate tokio_timer;
-
 mod batch;
 mod channel;
 mod client;
