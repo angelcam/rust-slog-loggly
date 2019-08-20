@@ -212,6 +212,10 @@ impl slog::Serializer for LogglyMessageSerializer {
             res
         })
     }
+
+    fn emit_serde(&mut self, key: Key, value: &slog::SerdeValue) -> slog::Result {
+        self.emit_serde_json_value(key, serde_json::json!(value.as_serde()))
+    }
 }
 
 #[cfg(test)]

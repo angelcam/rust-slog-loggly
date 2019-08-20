@@ -19,23 +19,32 @@ default = ["runtime"]
 runtime = ["tokio"]
 
 [dependencies]
-bytes       = "0.4"
-chrono      = "0.4"
-futures     = "0.1"
-hyper       = "0.12"
-hyper-tls   = "0.3"
-serde       = "1.0"
-serde_json  = "1.0"
-slog        = "2.3"
-tokio-timer = "0.2.6"
+bytes        = "0.4"
+chrono       = "0.4"
+erased-serde = "0.3"
+futures      = "0.1"
+hyper        = "0.12"
+hyper-tls    = "0.3"
+serde        = "1.0"
+serde_json   = "1.0"
+tokio-timer  = "0.2.6"
 
 [dependencies.tokio]
 version  = "0.1"
 optional = true
 
+[dependencies.slog]
+version = "2.3"
+features = ["nested-values"]
+
 [dev-dependencies]
 tokio = "0.1"
+slog_derive = "0.1"
+serde = {version = "1.0", features = ["derive"]}
 
 [[example]]
 name = "log"
 required-features = ["runtime"]
+
+[[example]]
+name = "nested"
