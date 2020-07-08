@@ -1,24 +1,18 @@
-use std::sync::Arc;
-use std::time::Duration;
+use std::{
+    future::Future,
+    pin::Pin,
+    sync::Arc,
+    task::{Context, Poll},
+    time::Duration,
+};
 
 use bytes::Bytes;
-
-use futures;
-
-use futures::{Future, Poll, Stream};
-
+use futures::{FutureExt, Stream, StreamExt};
 use hyper::client::HttpConnector;
 use hyper::{Client, Request, Uri};
-
 use hyper_tls::HttpsConnector;
 
-use tokio_timer::Timeout;
-
-use crate::batch::BatchStream;
-
-use crate::channel::Message;
-
-use crate::error::Error;
+use crate::{batch::BatchStream, channel::Message, error::Error};
 
 /// Default request timeout in seconds.
 const DEFAULT_REQUEST_TIMEOUT: u64 = 5;
@@ -74,9 +68,7 @@ impl LogglyClientBuilder {
         if let Some(c) = self.connector {
             connector = c;
         } else {
-            connector = HttpsConnector::new(1).map_err(|err| {
-                Error::from(format!("unable to create a HTTPS connector: {}", err))
-            })?;
+            connector = HttpsConnector::new();
         }
 
         let client = Client::builder().build(connector);
@@ -85,9 +77,11 @@ impl LogglyClientBuilder {
             "https://logs-01.loggly.com/bulk/{}/tag/{}/",
             self.token, self.tag
         );
+
         let url = url
             .parse()
-            .map_err(|_| Error::from("unable to parse Loggly URL"))?;
+            .map_err(|_| Error::new("unable to parse Loggly URL"))?;
+
         let url = Arc::new(url);
 
         let res = LogglyClient {
@@ -117,7 +111,7 @@ impl LogglyClient {
     }
 
     /// Send a given batch of messages.
-    pub fn batch_send<I>(&self, messages: I) -> impl Future<Item = (), Error = ()>
+    pub async fn batch_send<I>(&self, messages: I)
     where
         I: IntoIterator<Item = Bytes>,
     {
@@ -128,74 +122,66 @@ impl LogglyClient {
             batch.push(b'\n');
         }
 
-        self.send(Bytes::from(batch))
+        self.send(Bytes::from(batch)).await
     }
 
     /// Return a future that will ensure sending a given log message.
-    pub fn send(&self, msg: Bytes) -> impl Future<Item = (), Error = ()> {
-        let client = self.clone();
-
-        futures::stream::repeat(())
-            .take_while(move |_| {
-                client.try_send(msg.clone()).then(|res| match res {
-                    Ok(_) => Ok(false),
-                    Err(_) => Ok(true),
-                })
-            })
-            .for_each(|_| Ok(()))
+    pub async fn send(&self, msg: Bytes) {
+        loop {
+            if self.try_send(msg.clone()).await.is_ok() {
+                return;
+            }
+        }
     }
 
-    /// Return a future that will try to send a given log message.
-    pub fn try_send(&self, msg: Bytes) -> impl Future<Item = (), Error = Error> {
+    /// Try to send a given log message.
+    pub async fn try_send(&self, msg: Bytes) -> Result<(), Error> {
+        let send = tokio::time::timeout(self.timeout, self.try_send_inner(msg));
+
+        let res = match send.await {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(err)) => Err(err),
+            Err(_) => Err(Error::new("request timeout")),
+        };
+
+        if self.debug {
+            if let Err(err) = res.as_ref() {
+                eprintln!("Loggly request failed: {}", err);
+            }
+        }
+
+        res
+    }
+
+    /// Try to send a given log message.
+    async fn try_send_inner(&self, msg: Bytes) -> Result<(), Error> {
         let request = Request::post(&*self.url)
             .header("Content-Type", "text/plain")
             .body(msg.into())
-            .map_err(|_| Error::from("unable to create a request body"));
+            .map_err(|_| Error::new("unable to create a request body"))?;
 
-        let client = self.client.clone();
+        let res = self
+            .client
+            .request(request)
+            .await
+            .map_err(|err| Error::new(format!("unable to send a request: {}", err)))?;
 
-        let fut = futures::future::result(request)
-            .and_then(move |request| {
-                client
-                    .request(request)
-                    .map_err(|err| Error::from(format!("unable to send a request: {}", err)))
-            })
-            .and_then(|res| {
-                let status = res.status();
+        let status = res.status();
 
-                res.into_body()
-                    .concat2()
-                    .and_then(move |body| Ok((status, body)))
-                    .map_err(|err| Error::from(format!("unable to read a response body: {}", err)))
-            })
-            .and_then(|(status, body)| {
-                if status.is_success() {
-                    Ok(())
-                } else {
-                    let body = String::from_utf8_lossy(&body);
+        let body = hyper::body::to_bytes(res.into_body())
+            .await
+            .map_err(|err| Error::new(format!("unable to read a response body: {}", err)))?;
 
-                    Err(Error::from(format!(
-                        "server responded with HTTP {}:\n{}",
-                        status, body
-                    )))
-                }
-            });
+        if status.is_success() {
+            Ok(())
+        } else {
+            let body = String::from_utf8_lossy(&body);
 
-        let debug = self.debug;
-
-        Timeout::new(fut, self.timeout).map_err(move |err| {
-            if debug {
-                eprintln!("Loggly request failed: {}", err);
-            }
-
-            if err.is_inner() {
-                err.into_inner().unwrap()
-            } else if err.is_elapsed() {
-                Error::from("request timeout")
-            } else {
-                Error::from("timer error")
-            }
-        })
+            Err(Error::new(format!(
+                "server responded with HTTP {}:\n{}",
+                status, body
+            )))
+        }
     }
 
     /// Consume all messages from a given stream and send them to Loggly.
@@ -206,11 +192,11 @@ impl LogglyClient {
         sender_count: usize,
     ) -> LogglyMessageSender
     where
-        S: 'static + Stream<Item = Message<Bytes>, Error = ()> + Send,
+        S: Stream<Item = Message<Bytes>> + Send + Unpin + 'static,
     {
         let sender = messages
             .batch_stream(batch_size)
-            .and_then(move |messages| {
+            .map(move |messages| {
                 let mut batch = Vec::new();
                 let mut dhandles = Vec::new();
 
@@ -221,36 +207,35 @@ impl LogglyClient {
                     dhandles.push(dhandle);
                 }
 
-                let future = self.batch_send(batch).and_then(move |_| {
+                let client = self.clone();
+
+                async move {
+                    client.batch_send(batch).await;
+
                     // mark all messages as deleted once they are sent
                     for mut dhandle in dhandles {
                         dhandle.delete();
                     }
-
-                    Ok(())
-                });
-
-                Ok(future)
+                }
             })
-            .buffered(sender_count)
-            .for_each(|_| Ok(()));
+            .buffer_unordered(sender_count)
+            .for_each(|_| futures::future::ready(()));
 
         LogglyMessageSender {
-            inner: Box::new(sender),
+            inner: Box::pin(sender),
         }
     }
 }
 
 /// A future driving the send of all log messages.
 pub struct LogglyMessageSender {
-    inner: Box<Future<Item = (), Error = ()> + Send>,
+    inner: Pin<Box<dyn Future<Output = ()> + Send>>,
 }
 
 impl Future for LogglyMessageSender {
-    type Item = ();
-    type Error = ();
+    type Output = ();
 
-    fn poll(&mut self) -> Poll<(), ()> {
-        self.inner.poll()
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        self.inner.poll_unpin(cx)
     }
 }

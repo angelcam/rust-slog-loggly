@@ -1,15 +1,5 @@
-extern crate futures;
-
-extern crate slog_loggly;
-
-#[macro_use]
-extern crate slog;
-
-use futures::Future;
-
+use slog::{debug, error, info, o, warn, Drain, Logger};
 use slog_loggly::LogglyDrain;
-
-use slog::{Drain, Logger};
 
 fn main() {
     // Your Loggly token and tag.
@@ -31,5 +21,5 @@ fn main() {
     error!(logger, "error"; "key" => "value");
 
     // flush all log messages
-    fhandle.flush().wait().unwrap();
+    fhandle.blocking_flush().unwrap();
 }

@@ -1,84 +1,13 @@
-use std::collections::{HashSet, VecDeque};
-use std::sync::{Arc, Mutex};
+use std::{
+    collections::{HashSet, VecDeque},
+    pin::Pin,
+    sync::{Arc, Mutex},
+    task::{Context, Poll, Waker},
+};
 
-use futures::task;
-
-use futures::task::Task;
-use futures::{Async, Future, Poll, Stream};
+use futures::{Stream, StreamExt};
 
 use crate::error::Error;
-
-/// Common context for Flush future and FlushResolver.
-struct FlushContext {
-    result: Option<Result<(), Error>>,
-    task: Option<Task>,
-}
-
-impl FlushContext {
-    /// Create a new FlushContext.
-    fn new() -> FlushContext {
-        FlushContext {
-            result: None,
-            task: None,
-        }
-    }
-}
-
-/// Flush future resolver.
-struct FlushResolver {
-    context: Arc<Mutex<FlushContext>>,
-}
-
-impl FlushResolver {
-    /// Create a new FlushResolver with a given shared context.
-    fn new(context: Arc<Mutex<FlushContext>>) -> FlushResolver {
-        FlushResolver { context }
-    }
-
-    /// Resolve the future with a given result.
-    fn resolve(&mut self, res: Result<(), Error>) {
-        let mut context = self.context.lock().unwrap();
-
-        context.result = Some(res);
-
-        if let Some(task) = context.task.take() {
-            task.notify();
-        }
-    }
-}
-
-/// Flush future.
-pub struct Flush {
-    context: Arc<Mutex<FlushContext>>,
-}
-
-impl Flush {
-    /// Create a new Flush future with a given context.
-    fn new(context: Arc<Mutex<FlushContext>>) -> Flush {
-        Flush { context }
-    }
-}
-
-impl Future for Flush {
-    type Item = ();
-    type Error = Error;
-
-    fn poll(&mut self) -> Poll<(), Error> {
-        let mut context = self.context.lock().unwrap();
-
-        if let Some(res) = context.result.clone() {
-            match res {
-                Ok(()) => Ok(Async::Ready(())),
-                Err(err) => Err(err),
-            }
-        } else {
-            // let's wait until the result is available
-            context.task = Some(task::current());
-
-            Ok(Async::NotReady)
-        }
-    }
-}
 
 /// A queued message.
 pub struct Message<T> {
@@ -153,7 +82,8 @@ impl<T> Drop for MessageDeleteHandle<T> {
 /// Queue element. It is either a message or a flush resolver.
 enum QueueItem<T> {
     Message(Message<T>),
-    Flush(FlushResolver),
+    AsyncFlush(futures::channel::oneshot::Sender<Result<(), Error>>),
+    BlockingFlush(std::sync::mpsc::Sender<Result<(), Error>>),
 }
 
 /// Channel queue.
@@ -164,7 +94,7 @@ struct Queue<T> {
     in_flight: HashSet<usize>,
     message_id: usize,
 
-    receiver_task: Option<Task>,
+    receiver_task: Option<Waker>,
     closed: bool,
 }
 
@@ -193,14 +123,14 @@ impl<T> Queue<T> {
     fn send(&mut self, data: T) -> Result<(), Error> {
         if let Some(capacity) = self.capacity {
             if self.messages >= capacity {
-                return Err(Error::from(
+                return Err(Error::new(
                     "unable to send a given message: the queue is full",
                 ));
             }
         }
 
         if self.closed {
-            return Err(Error::from(
+            return Err(Error::new(
                 "unable to send a given message: the channel has been closed",
             ));
         }
@@ -218,7 +148,7 @@ impl<T> Queue<T> {
 
         // notify the receiver that there is a new message in the queue
         if let Some(task) = self.receiver_task.take() {
-            task.notify();
+            task.wake();
         }
 
         Ok(())
@@ -235,7 +165,7 @@ impl<T> Queue<T> {
             // notify the receiver that the in-flight set is empty
             if self.in_flight.is_empty() {
                 if let Some(task) = self.receiver_task.take() {
-                    task.notify();
+                    task.wake();
                 }
             }
         }
@@ -243,25 +173,48 @@ impl<T> Queue<T> {
 
     /// Flush the queue. The method returns a future that will get resolved
     /// once all messages sent before the flush get deleted.
-    fn flush(&mut self) -> Flush {
-        let fcontext = Arc::new(Mutex::new(FlushContext::new()));
-
-        let mut fresolver = FlushResolver::new(fcontext.clone());
+    fn async_flush(&mut self) -> futures::channel::oneshot::Receiver<Result<(), Error>> {
+        let (tx, rx) = futures::channel::oneshot::channel();
 
         if self.closed {
-            fresolver.resolve(Err(Error::from(
+            let res = tx.send(Err(Error::new(
                 "unable to flush the channel: the channel has been closed",
             )));
+
+            res.unwrap_or_default();
         } else {
-            self.pending.push_back(QueueItem::Flush(fresolver));
+            self.pending.push_back(QueueItem::AsyncFlush(tx));
 
             // notify the receiver about a pending flush
             if let Some(task) = self.receiver_task.take() {
-                task.notify();
+                task.wake();
             }
         }
 
-        Flush::new(fcontext)
+        rx
+    }
+
+    /// Flush the queue. The method returns a blocking handle that will get
+    /// resolved once all messages sent before the flush get deleted.
+    fn blocking_flush(&mut self) -> std::sync::mpsc::Receiver<Result<(), Error>> {
+        let (tx, rx) = std::sync::mpsc::channel();
+
+        if self.closed {
+            let res = tx.send(Err(Error::new(
+                "unable to flush the channel: the channel has been closed",
+            )));
+
+            res.unwrap_or_default();
+        } else {
+            self.pending.push_back(QueueItem::BlockingFlush(tx));
+
+            // notify the receiver about a pending flush
+            if let Some(task) = self.receiver_task.take() {
+                task.wake();
+            }
+        }
+
+        rx
     }
 
     /// Mark the channel as closed.
@@ -270,50 +223,57 @@ impl<T> Queue<T> {
     }
 }
 
-impl<T> Stream for Queue<T> {
+impl<T> Stream for Queue<T>
+where
+    T: Unpin,
+{
     type Item = Message<T>;
-    type Error = ();
 
-    fn poll(&mut self) -> Poll<Option<Message<T>>, ()> {
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         // get rid of all flush handles at front if there is nothing in flight
         if self.in_flight.is_empty() {
             while let Some(item) = self.pending.pop_front() {
-                if let QueueItem::Message(msg) = item {
-                    // put the message back, we don't want to lose it
-                    self.pending.push_front(QueueItem::Message(msg));
+                match item {
+                    QueueItem::Message(msg) => {
+                        // put the message back, we don't want to lose it
+                        self.pending.push_front(QueueItem::Message(msg));
 
-                    break;
-                } else if let QueueItem::Flush(mut handle) = item {
-                    handle.resolve(Ok(()));
-                } else {
-                    panic!("unhandled QueueItem variant");
+                        break;
+                    }
+                    QueueItem::AsyncFlush(handle) => {
+                        handle.send(Ok(())).unwrap_or_default();
+                    }
+                    QueueItem::BlockingFlush(handle) => {
+                        handle.send(Ok(())).unwrap_or_default();
+                    }
                 }
             }
         }
 
         if let Some(item) = self.pending.pop_front() {
-            if let QueueItem::Message(msg) = item {
-                // decrement the message counter
-                self.messages -= 1;
+            match item {
+                QueueItem::Message(msg) => {
+                    // decrement the message counter
+                    self.messages -= 1;
 
-                Ok(Async::Ready(Some(msg)))
-            } else if let QueueItem::Flush(handle) = item {
-                // put the flush handle back, we need to wait until the
-                // in_flight set is empty
-                self.pending.push_front(QueueItem::Flush(handle));
+                    Poll::Ready(Some(msg))
+                }
+                flush => {
+                    // put the flush handle back, we need to wait until the
+                    // in_flight set is empty
+                    self.pending.push_front(flush);
 
-                self.receiver_task = Some(task::current());
+                    self.receiver_task = Some(cx.waker().clone());
 
-                Ok(Async::NotReady)
-            } else {
-                panic!("unhandled QueueItem variant");
+                    Poll::Pending
+                }
             }
         } else {
             // the queue is empty, wake me up again once there is something
             // inside
-            self.receiver_task = Some(task::current());
+            self.receiver_task = Some(cx.waker().clone());
 
-            Ok(Async::NotReady)
+            Poll::Pending
         }
     }
 }
@@ -338,8 +298,14 @@ impl<T> Sender<T> {
 
     /// Flush the queue. The method returns a future that will get resolved
     /// once all messages sent before the flush get deleted.
-    pub fn flush(&mut self) -> Flush {
-        self.queue.lock().unwrap().flush()
+    pub fn async_flush(&mut self) -> futures::channel::oneshot::Receiver<Result<(), Error>> {
+        self.queue.lock().unwrap().async_flush()
+    }
+
+    /// Flush the queue. The method returns a blocking handle that will get
+    /// resolved once all messages sent before the flush get deleted.
+    pub fn blocking_flush(&mut self) -> std::sync::mpsc::Receiver<Result<(), Error>> {
+        self.queue.lock().unwrap().blocking_flush()
     }
 }
 
@@ -355,20 +321,22 @@ impl<T> Receiver<T> {
     }
 }
 
-impl<T> Stream for Receiver<T> {
+impl<T> Stream for Receiver<T>
+where
+    T: Unpin,
+{
     type Item = Message<T>;
-    type Error = ();
 
-    fn poll(&mut self) -> Poll<Option<Message<T>>, ()> {
-        let res = self.queue.lock().unwrap().poll();
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let res = self.queue.lock().unwrap().poll_next_unpin(cx);
 
-        if let Ok(Async::Ready(Some(mut message))) = res {
+        if let Poll::Ready(Some(mut message)) = res {
             message.queue = Some(self.queue.clone());
 
             // mark the message as in-flight
             self.queue.lock().unwrap().add_in_flight(message.id);
 
-            Ok(Async::Ready(Some(message)))
+            Poll::Ready(Some(message))
         } else {
             res
         }

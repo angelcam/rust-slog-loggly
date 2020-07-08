@@ -20,85 +20,18 @@
 //! ## Using the Loggly drain in an asynchronous application
 //!
 //! ```rust
-//! extern crate futures;
-//!
-//! #[macro_use]
-//! extern crate slog;
-//! extern crate slog_loggly;
-//! extern crate tokio;
-//!
-//! use futures::Future;
-//!
-//! use slog::{Drain, Logger};
-//!
+//! use slog::{debug, error, info, o, warn, Drain, Logger};
 //! use slog_loggly::LogglyDrain;
 //!
-//! use tokio::runtime::Runtime;
-//!
-//! fn main() {
-//!     // Your Loggly token and tag.
-//!     let loggly_token = "your-loggly-token";
-//!     let loggly_tag = "some-app";
-//!
-//!     let mut runtime = Runtime::new().unwrap();
-//!
-//!     let app = futures::future::lazy(move || {
-//!         // Create a custom Loggly drain.
-//!         let (drain, mut fhandle) = LogglyDrain::builder(loggly_token, loggly_tag)
-//!             .spawn_task()
-//!             .unwrap();
-//!
-//!         // Create a logger.
-//!         let logger = Logger::root(drain.fuse(), o!());
-//!
-//!         debug!(logger, "debug"; "key" => "value");
-//!         info!(logger, "info"; "key" => "value");
-//!         warn!(logger, "warn"; "key" => "value");
-//!         error!(logger, "error"; "key" => "value");
-//!
-//!         // You can return the flush handle to make sure that all log
-//!         // messages get sent before the process terminates.
-//!         // fhandle.flush()
-//!
-//!         futures::future::ok(())
-//!     });
-//!
-//!     let res: Result<(), ()> = runtime.block_on(app);
-//!
-//!     res.unwrap();
-//!
-//!     // We could just use `tokio::run(app)`, however, it would block the
-//!     // thread forever as it waits for the runtime to become idle. (The
-//!     // backgroud task for sending log messages never terminates.)
-//!     runtime.shutdown_now()
-//!         .wait()
-//!         .unwrap();
-//! }
-//! ```
-//!
-//! ## Using the Loggly drain in a normal application
-//!
-//! ```rust
-//! extern crate futures;
-//!
-//! #[macro_use]
-//! extern crate slog;
-//! extern crate slog_loggly;
-//!
-//! use futures::Future;
-//!
-//! use slog::{Drain, Logger};
-//!
-//! use slog_loggly::LogglyDrain;
-//!
-//! fn main() {
+//! #[tokio::main]
+//! async fn main() {
 //!     // Your Loggly token and tag.
 //!     let loggly_token = "your-loggly-token";
 //!     let loggly_tag = "some-app";
 //!
 //!     // Create a custom Loggly drain.
 //!     let (drain, mut fhandle) = LogglyDrain::builder(loggly_token, loggly_tag)
-//!         .spawn_thread()
+//!         .spawn_task()
 //!         .unwrap();
 //!
 //!     // Create a logger.
@@ -109,10 +42,38 @@
 //!     warn!(logger, "warn"; "key" => "value");
 //!     error!(logger, "error"; "key" => "value");
 //!
-//!     // You can use the flush handle to make sure that all log messages get
-//!     // sent before the process terminates.
-//!     // fhandle.flush().wait().unwrap();
+//!     // You can return the flush handle to make sure that all log
+//!     // messages get sent before the process terminates.
+//!     // fhandle.async_flush().await.unwrap();
 //! }
+//! ```
+//!
+//! ## Using the Loggly drain in a normal application
+//!
+//! ```rust
+//! use slog::{debug, error, info, o, warn, Drain, Logger};
+//! use slog_loggly::LogglyDrain;
+//!
+//! // Your Loggly token and tag.
+//! let loggly_token = "your-loggly-token";
+//! let loggly_tag = "some-app";
+//!
+//! // Create a custom Loggly drain.
+//! let (drain, mut fhandle) = LogglyDrain::builder(loggly_token, loggly_tag)
+//!     .spawn_thread()
+//!     .unwrap();
+//!
+//! // Create a logger.
+//! let logger = Logger::root(drain.fuse(), o!());
+//!
+//! debug!(logger, "debug"; "key" => "value");
+//! info!(logger, "info"; "key" => "value");
+//! warn!(logger, "warn"; "key" => "value");
+//! error!(logger, "error"; "key" => "value");
+//!
+//! // You can use the flush handle to make sure that all log messages get
+//! // sent before the process terminates.
+//! // fhandle.blocking_flush().unwrap();
 //! ```
 
 mod batch;
@@ -121,36 +82,20 @@ mod client;
 mod error;
 mod serializer;
 
-use std::str;
+use std::{str, sync::Mutex, time::Duration};
 
 #[cfg(feature = "runtime")]
 use std::thread;
 
-use std::sync::Mutex;
-use std::time::Duration;
-
 use bytes::Bytes;
-
 use chrono::{SecondsFormat, Utc};
-
 use hyper::client::HttpConnector;
-
 use hyper_tls::HttpsConnector;
+use slog::{Drain, OwnedKVList, Record, Serializer as SlogSerializer, KV};
 
-use slog::Serializer as SlogSerializer;
-use slog::{Drain, OwnedKVList, Record, KV};
+use crate::{channel::Sender, client::LogglyClient, serializer::LogglyMessageSerializer};
 
-use crate::channel::Sender;
-
-use crate::client::LogglyClient;
-
-use crate::serializer::LogglyMessageSerializer;
-
-pub use crate::client::LogglyMessageSender;
-
-pub use crate::error::Error;
-
-pub use crate::channel::Flush;
+pub use crate::{client::LogglyMessageSender, error::Error};
 
 const DEFAULT_SENDER_COUNT: usize = 16;
 const DEFAULT_BATCH_SIZE: usize = 20;
@@ -252,8 +197,8 @@ impl LogglyDrainBuilder {
         Ok((drain, sender, fhandle))
     }
 
-    /// Spawn a task within the current executor context. The task will be
-    /// responsible for sending all log messages.
+    /// Spawn a tokio task within the current executor context. The task will
+    /// be responsible for sending all log messages.
     #[cfg(feature = "runtime")]
     pub fn spawn_task(self) -> Result<(LogglyDrain, FlushHandle), Error> {
         let (drain, sender, flush_handle) = self.build()?;
@@ -269,10 +214,14 @@ impl LogglyDrainBuilder {
         let (drain, sender, flush_handle) = self.build()?;
 
         thread::spawn(move || {
-            let mut runtime =
-                tokio::runtime::current_thread::Runtime::new().expect("tokio runtime expected");
+            let mut runtime = tokio::runtime::Builder::new()
+                .enable_io()
+                .enable_time()
+                .basic_scheduler()
+                .build()
+                .expect("unable to create tokio runtime");
 
-            runtime.block_on(sender).unwrap()
+            runtime.block_on(sender)
         });
 
         Ok((drain, flush_handle))
@@ -372,10 +321,23 @@ impl FlushHandle {
         FlushHandle { sender }
     }
 
-    /// Flush all currently queued log messages. The method returns a future
-    /// that will be resolved once all messages that have been sent before
-    /// calling this method get successfuly sent to Loggly.
-    pub fn flush(&mut self) -> Flush {
-        self.sender.flush()
+    /// Flush all currently queued log messages. The method will be resolved
+    /// once all messages that have been sent before calling this method get
+    /// successfully sent to Loggly.
+    pub async fn async_flush(&mut self) -> Result<(), Error> {
+        self.sender
+            .async_flush()
+            .await
+            .map_err(|_| Error::new("Loggly message sender task has been canceled"))?
+    }
+
+    /// Flush all currently queued log messages. The method will be resolved
+    /// once all messages that have been sent before calling this method get
+    /// successfully sent to Loggly.
+    pub fn blocking_flush(&mut self) -> Result<(), Error> {
+        self.sender
+            .blocking_flush()
+            .recv()
+            .map_err(|_| Error::new("Loggly message sender task has been canceled"))?
     }
 }

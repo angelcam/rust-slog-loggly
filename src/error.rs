@@ -1,5 +1,3 @@
-use std;
-
 use std::fmt::{Display, Formatter};
 
 /// Error.
@@ -8,26 +6,22 @@ pub struct Error {
     msg: String,
 }
 
-impl std::error::Error for Error {
-    fn description(&self) -> &str {
-        &self.msg
+impl Error {
+    /// Create a new error with a given message.
+    pub fn new<T>(msg: T) -> Self
+    where
+        T: ToString,
+    {
+        Self {
+            msg: msg.to_string(),
+        }
     }
 }
+
+impl std::error::Error for Error {}
 
 impl Display for Error {
     fn fmt(&self, f: &mut Formatter) -> Result<(), std::fmt::Error> {
         f.write_str(&self.msg)
-    }
-}
-
-impl From<String> for Error {
-    fn from(msg: String) -> Error {
-        Error { msg }
-    }
-}
-
-impl<'a> From<&'a str> for Error {
-    fn from(msg: &'a str) -> Error {
-        Error::from(msg.to_string())
     }
 }

@@ -1,16 +1,11 @@
-use std::fmt;
-use std::io;
-
-use std::cell::RefCell;
-use std::collections::HashMap;
-use std::fmt::Write;
+use std::{
+    cell::RefCell,
+    collections::HashMap,
+    fmt::{self, Write},
+    io,
+};
 
 use bytes::Bytes;
-
-use serde_json;
-
-use slog;
-
 use slog::Key;
 
 thread_local! {

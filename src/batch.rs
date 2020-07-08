@@ -1,5 +1,9 @@
-use futures::stream::Fuse;
-use futures::{Async, Poll, Stream};
+use std::{
+    pin::Pin,
+    task::{Context, Poll},
+};
+
+use futures::stream::{Fuse, Stream, StreamExt};
 
 /// A simple extension to the futures::Stream allowing to take elements in
 /// batches of a given maximum size.
@@ -37,22 +41,21 @@ impl<S> Batch<S> {
 
 impl<S> Stream for Batch<S>
 where
-    S: Stream,
+    S: Stream + Unpin,
 {
     type Item = Vec<S::Item>;
-    type Error = S::Error;
 
-    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let mut res = Vec::new();
 
         while res.len() < self.max_size {
-            if let Async::Ready(item) = self.stream.poll()? {
+            if let Poll::Ready(item) = self.stream.poll_next_unpin(cx) {
                 if let Some(item) = item {
                     res.push(item);
                 } else if res.is_empty() {
-                    return Ok(Async::Ready(None));
+                    return Poll::Ready(None);
                 } else {
-                    return Ok(Async::Ready(Some(res)));
+                    return Poll::Ready(Some(res));
                 }
             } else {
                 break;
@@ -60,9 +63,9 @@ where
         }
 
         if res.is_empty() {
-            Ok(Async::NotReady)
+            Poll::Pending
         } else {
-            Ok(Async::Ready(Some(res)))
+            Poll::Ready(Some(res))
         }
     }
 }
