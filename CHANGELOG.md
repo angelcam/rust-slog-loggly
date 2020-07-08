@@ -1,3 +1,7 @@
+## v0.4.0 (2020-07-08)
+
+* Switch to the latest hyper/tokio/futures
+
 ## v0.3.2 (2019-06-20)
 
 * Fix the timestamp format
