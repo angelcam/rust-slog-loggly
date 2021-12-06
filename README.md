@@ -17,7 +17,7 @@ This is an unofficial Loggly drain for the slog logging infrastructure in Rust.
 Add the following dependency into your Cargo.toml:
 
 ```
-slog-loggly = "0.4"
+slog-loggly = "0.5"
 ```
 
 See the `examples` directory and the [documentation](https://docs.rs/slog-loggly/) for usage examples.

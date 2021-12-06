@@ -1,3 +1,9 @@
+# Changelog
+
+## v0.5.0 (2021-12-06)
+
+* Switch to tokio 1.x and hyper 0.14.x and update the remaining dependencies
+
 ## v0.4.0 (2020-07-08)
 
 * Switch to the latest hyper/tokio/futures
