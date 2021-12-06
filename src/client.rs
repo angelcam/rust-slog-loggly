@@ -8,8 +8,10 @@ use std::{
 
 use bytes::Bytes;
 use futures::{FutureExt, Stream, StreamExt};
-use hyper::client::HttpConnector;
-use hyper::{Client, Request, Uri};
+use hyper::{
+    client::{Client, HttpConnector},
+    Request, Uri,
+};
 use hyper_tls::HttpsConnector;
 
 use crate::{batch::BatchStream, channel::Message, error::Error};

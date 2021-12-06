@@ -214,10 +214,9 @@ impl LogglyDrainBuilder {
         let (drain, sender, flush_handle) = self.build()?;
 
         thread::spawn(move || {
-            let mut runtime = tokio::runtime::Builder::new()
+            let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_io()
                 .enable_time()
-                .basic_scheduler()
                 .build()
                 .expect("unable to create tokio runtime");
 
