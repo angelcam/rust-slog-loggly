@@ -1,18 +1,15 @@
-<p align="center">
-  <a href="https://travis-ci.org/angelcam/rust-slog-loggly">
-      <img src="https://img.shields.io/travis/angelcam/rust-slog-loggly/master.svg" alt="Travis CI Build Status">
-  </a>
-
-  <a href="https://crates.io/crates/slog-loggly">
-      <img src="https://img.shields.io/crates/d/slog-loggly.svg" alt="slog-loggly on crates.io">
-  </a>
-
-  <a href="https://docs.rs/slog-loggly/">
-      <img src="https://docs.rs/slog-loggly/badge.svg" alt="docs-rs: crate documentation">
-  </a>
-</p>
-
 # Loggly drain for slog
+
+[![Crates.io][crates-badge]][crates-url]
+[![Documentation][doc-badge]][doc-url]
+[![Build Status][build-badge]][build-url]
+
+[crates-badge]: https://img.shields.io/crates/d/slog-loggly.svg
+[crates-url]: https://crates.io/crates/slog-loggly
+[doc-badge]: https://docs.rs/slog-loggly/badge.svg
+[doc-url]: https://docs.rs/slog-loggly/
+[build-badge]: https://img.shields.io/travis/angelcam/rust-slog-loggly/master.svg
+[build-url]: https://travis-ci.org/angelcam/rust-slog-loggly
 
 This is an unofficial Loggly drain for the slog logging infrastructure in Rust.
 
