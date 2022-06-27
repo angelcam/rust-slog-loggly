@@ -139,14 +139,15 @@ impl LogglyClient {
     /// Try to send a given log message.
     pub async fn try_send(&self, msg: Bytes) -> Result<(), Error> {
         let action = || {
-          self.try_send_inner(msg.clone())
+          tokio::time::timeout(self.timeout, self.try_send_inner(msg.clone()))
         };
 
-        let result = with_retry(Some(self.timeout.as_millis() as u64), None, action).await;
+        let send = with_retry(None, None, action);
 
-        let res = match result {
-            Ok(()) => Ok(()),
-            Err(err) => Err(err),
+        let res = match send.await {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(err)) => Err(err),
+            Err(_) => Err(Error::new("request timeout")),
         };
 
         if self.debug {
