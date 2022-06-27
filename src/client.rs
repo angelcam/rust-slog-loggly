@@ -14,7 +14,7 @@ use hyper::{
 };
 use hyper_tls::HttpsConnector;
 
-use crate::{batch::BatchStream, channel::Message, error::Error};
+use crate::{batch::BatchStream, channel::Message, error::Error, retry::with_retry};
 
 /// Default request timeout in seconds.
 const DEFAULT_REQUEST_TIMEOUT: u64 = 5;
@@ -138,12 +138,15 @@ impl LogglyClient {
 
     /// Try to send a given log message.
     pub async fn try_send(&self, msg: Bytes) -> Result<(), Error> {
-        let send = tokio::time::timeout(self.timeout, self.try_send_inner(msg));
+        let action = || {
+          self.try_send_inner(msg.clone())
+        };
 
-        let res = match send.await {
-            Ok(Ok(())) => Ok(()),
-            Ok(Err(err)) => Err(err),
-            Err(_) => Err(Error::new("request timeout")),
+        let result = with_retry(Some(self.timeout.as_millis() as u64), None, action).await;
+
+        let res = match result {
+            Ok(()) => Ok(()),
+            Err(err) => Err(err),
         };
 
         if self.debug {
