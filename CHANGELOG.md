@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.5.1 (2022-12-13)
+
+* Remove thread-local string buffers and add key-value filtering
+
 ## v0.5.0 (2021-12-06)
 
 * Switch to tokio 1.x and hyper 0.14.x and update the remaining dependencies
