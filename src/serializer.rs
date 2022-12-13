@@ -1,5 +1,4 @@
 use std::{
-    cell::RefCell,
     collections::HashMap,
     fmt::{self, Write},
     io,
@@ -8,83 +7,121 @@ use std::{
 use bytes::Bytes;
 use slog::Key;
 
-thread_local! {
-    static TL_STRING_BUFFER: RefCell<String> = RefCell::new(String::with_capacity(128));
-    static TL_BUFFER_POOL: RefCell<BufferPool> = RefCell::new(BufferPool::new());
+/// Key-value pair filter.
+pub trait KVFilter {
+    /// Check if a given key should be accepted.
+    fn is_accepted(&self, key: &Key) -> bool;
 }
 
-/// A simple pool of string buffers. It's used to avoid excessive allocations
-/// when serializing JSON messages.
-struct BufferPool {
-    buffers: Vec<String>,
+impl<T> KVFilter for T
+where
+    T: Fn(&Key) -> bool,
+{
+    fn is_accepted(&self, key: &Key) -> bool {
+        (self)(key)
+    }
 }
 
-impl BufferPool {
-    /// Create a new empty pool of string buffers.
-    fn new() -> BufferPool {
-        BufferPool {
-            buffers: Vec::new(),
-        }
-    }
+/// Accept all key-value pairs.
+pub struct AcceptAll;
 
-    /// Take a string buffer (if available) or create a new one.
-    fn take(&mut self) -> String {
-        if let Some(buffer) = self.buffers.pop() {
-            buffer
-        } else {
-            String::new()
-        }
-    }
-
-    /// Put back a given string buffer.
-    fn put_back(&mut self, mut buffer: String) {
-        // we need to clear the buffer first
-        buffer.clear();
-
-        self.buffers.push(buffer);
+impl KVFilter for AcceptAll {
+    fn is_accepted(&self, _: &Key) -> bool {
+        true
     }
 }
 
 /// Slog serializer for constructing Loggly messages.
-pub struct LogglyMessageSerializer {
-    map: HashMap<Key, serde_json::Value>,
+pub struct LogglyMessageSerializer<'a, F = AcceptAll> {
+    field_map: HashMap<Key, serde_json::Value>,
+    misc_map: HashMap<Key, serde_json::Value>,
+    misc_name: Key,
+    field_filter: &'a F,
 }
 
-impl LogglyMessageSerializer {
+impl<'a> LogglyMessageSerializer<'a> {
     /// Create a new serializer.
-    pub fn new() -> LogglyMessageSerializer {
+    pub fn new() -> Self {
+        Self {
+            field_map: HashMap::new(),
+            misc_map: HashMap::new(),
+            misc_name: "misc",
+            field_filter: &AcceptAll,
+        }
+    }
+}
+
+impl<'a, F> LogglyMessageSerializer<'a, F> {
+    /// Set the field filter.
+    pub fn with_field_filter<T>(
+        self,
+        fallback_field: Key,
+        filter: &'a T,
+    ) -> LogglyMessageSerializer<'a, T> {
         LogglyMessageSerializer {
-            map: HashMap::new(),
+            field_map: self.field_map,
+            misc_map: self.misc_map,
+            misc_name: fallback_field,
+            field_filter: filter,
         }
     }
 
     /// Finish the message.
-    pub fn finish(self) -> slog::Result<Bytes> {
-        let json = serde_json::to_vec(&self.map)
-            .map_err(|_| io::Error::new(io::ErrorKind::Other, "unable to finalize a log message"));
+    pub fn finish(mut self) -> slog::Result<Bytes> {
+        if let Some(val) = self.serialize_misc_fields()? {
+            self.field_map.insert(self.misc_name, val.into());
+        }
 
-        TL_BUFFER_POOL.with(move |pool| {
-            let mut bpool = pool.borrow_mut();
+        let json = serde_json::to_vec(&self.field_map).map_err(|_| {
+            io::Error::new(io::ErrorKind::Other, "unable to finalize a log message")
+        })?;
 
-            for (_, value) in self.map.into_iter() {
-                if let serde_json::Value::String(buffer) = value {
-                    bpool.put_back(buffer);
-                }
-            }
-        });
-
-        let res = Bytes::from(json?);
-
-        Ok(res)
+        Ok(Bytes::from(json))
     }
 
+    /// Serialize filtered fields.
+    fn serialize_misc_fields(&self) -> slog::Result<Option<String>> {
+        if self.misc_map.is_empty() {
+            return Ok(None);
+        }
+
+        let mut res = String::new();
+
+        let mut iter = self.misc_map.iter();
+
+        if let Some((k, v)) = iter.next() {
+            if let Some(s) = v.as_str() {
+                write!(res, "{}: {}", k, s)?;
+            } else {
+                write!(res, "{}: {}", k, v)?;
+            }
+        }
+
+        for (k, v) in iter {
+            if let Some(s) = v.as_str() {
+                write!(res, ", {}: {}", k, s)?;
+            } else {
+                write!(res, ", {}: {}", k, v)?;
+            }
+        }
+
+        Ok(Some(res))
+    }
+}
+
+impl<'a, F> LogglyMessageSerializer<'a, F>
+where
+    F: KVFilter,
+{
     /// Emit a given serde_json::Value key-value pair.
     fn emit_serde_json_value(&mut self, key: Key, val: serde_json::Value) -> slog::Result {
-        if let Some(serde_json::Value::String(old)) = self.map.insert(key, val) {
-            // put back the old buffer if there is one
-            TL_BUFFER_POOL.with(move |pool| {
-                pool.borrow_mut().put_back(old);
-            });
+        let is_accepted = matches!(key, "level" | "file" | "message" | "timestamp")
+            || self.field_filter.is_accepted(&key);
+
+        if !is_accepted || key == self.misc_name {
+            self.misc_map.insert(key, val);
+        } else {
+            self.field_map.insert(key, val);
         }
 
         Ok(())
@@ -112,16 +149,18 @@ impl LogglyMessageSerializer {
     }
 
     /// Emit a string key-value pair.
-    fn emit_serde_json_string(&mut self, key: Key, val: &str) -> slog::Result {
-        let mut buffer = TL_BUFFER_POOL.with(|pool| pool.borrow_mut().take());
-
-        buffer.push_str(val);
-
-        self.emit_serde_json_value(key, serde_json::Value::String(buffer))
+    fn emit_serde_json_string<T>(&mut self, key: Key, val: T) -> slog::Result
+    where
+        T: ToString,
+    {
+        self.emit_serde_json_value(key, serde_json::Value::String(val.to_string()))
     }
 }
 
-impl slog::Serializer for LogglyMessageSerializer {
+impl<'a, F> slog::Serializer for LogglyMessageSerializer<'a, F>
+where
+    F: KVFilter,
+{
     fn emit_bool(&mut self, key: Key, val: bool) -> slog::Result {
         self.emit_serde_json_bool(key, val)
     }
@@ -131,7 +170,7 @@ impl slog::Serializer for LogglyMessageSerializer {
     }
 
     fn emit_char(&mut self, key: Key, val: char) -> slog::Result {
-        self.emit_arguments(key, &format_args!("{}", val))
+        self.emit_serde_json_string(key, val)
     }
 
     fn emit_none(&mut self, key: Key) -> slog::Result {
@@ -195,17 +234,7 @@ impl slog::Serializer for LogglyMessageSerializer {
     }
 
     fn emit_arguments(&mut self, key: Key, val: &fmt::Arguments) -> slog::Result {
-        TL_STRING_BUFFER.with(|buf| {
-            let mut buf = buf.borrow_mut();
-
-            buf.write_fmt(*val).unwrap();
-
-            let res = self.emit_serde_json_string(key, &*buf);
-
-            buf.clear();
-
-            res
-        })
+        self.emit_serde_json_string(key, val)
     }
 }
 
@@ -230,35 +259,7 @@ mod tests {
 
         expected.insert(Key::from("key"), serde_json::Value::Bool(true));
 
-        assert_eq!(serializer.map, expected);
-    }
-
-    /// Test that the serialization buffers get reused.
-    #[test]
-    fn test_buffer_reuse() {
-        let mut serializer = LogglyMessageSerializer::new();
-
-        serializer.emit_str(Key::from("key_1"), "value").unwrap();
-        serializer.emit_u32(Key::from("key_1"), 1).unwrap();
-        serializer.emit_bool(Key::from("key_1"), true).unwrap();
-        serializer.emit_str(Key::from("key_2"), "value").unwrap();
-        serializer.emit_str(Key::from("key_3"), "value").unwrap();
-
-        serializer.finish().unwrap();
-
-        // this time there will be no allocations except the hash map and the
-        // returned message
-        let mut serializer = LogglyMessageSerializer::new();
-
-        serializer.emit_str(Key::from("key_1"), "value").unwrap();
-        serializer.emit_str(Key::from("key_2"), "value").unwrap();
-        serializer.emit_str(Key::from("key_3"), "value").unwrap();
-
-        serializer.finish().unwrap();
-
-        let buffers = TL_BUFFER_POOL.with(|pool| pool.borrow().buffers.len());
-
-        assert_eq!(buffers, 3);
+        assert_eq!(serializer.field_map, expected);
     }
 
     /// Test that different types are serialized correctly.

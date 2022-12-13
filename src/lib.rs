@@ -91,17 +91,23 @@ use bytes::Bytes;
 use chrono::{SecondsFormat, Utc};
 use hyper::client::HttpConnector;
 use hyper_tls::HttpsConnector;
-use slog::{Drain, OwnedKVList, Record, Serializer as SlogSerializer, KV};
+use slog::{Drain, Key, OwnedKVList, Record, Serializer as SlogSerializer, KV};
 
 use crate::{channel::Sender, client::LogglyClient, serializer::LogglyMessageSerializer};
 
-pub use crate::{client::LogglyMessageSender, error::Error};
+pub use crate::{
+    client::LogglyMessageSender,
+    error::Error,
+    serializer::{AcceptAll, KVFilter},
+};
 
 const DEFAULT_SENDER_COUNT: usize = 16;
 const DEFAULT_BATCH_SIZE: usize = 20;
 
 /// Loggly drain builder.
-pub struct LogglyDrainBuilder {
+pub struct LogglyDrainBuilder<F = AcceptAll> {
+    field_filter: F,
+    fallback_field: Key,
     queue_max_size: Option<usize>,
     batch_size: usize,
     sender_count: usize,
@@ -114,8 +120,10 @@ pub struct LogglyDrainBuilder {
 
 impl LogglyDrainBuilder {
     /// Create a new builder. Use a given Loggly token and tag.
-    fn new(token: &str, tag: &str) -> LogglyDrainBuilder {
-        LogglyDrainBuilder {
+    fn new(token: &str, tag: &str) -> Self {
+        Self {
+            field_filter: AcceptAll,
+            fallback_field: "",
             queue_max_size: None,
             batch_size: DEFAULT_BATCH_SIZE,
             sender_count: DEFAULT_SENDER_COUNT,
@@ -126,18 +134,51 @@ impl LogglyDrainBuilder {
             debug: false,
         }
     }
+}
+
+impl<F> LogglyDrainBuilder<F> {
+    /// Use a given key-value pair filter.
+    ///
+    /// All key-value pairs rejected by the given filter will be serialized
+    /// under a given fallback field.
+    ///
+    /// This feature can be used if you want Loggly to index only a given
+    /// subset of fields.
+    pub fn kv_filter<K, T>(self, fallback_field: K, filter: T) -> LogglyDrainBuilder<T>
+    where
+        K: Into<Key>,
+    {
+        let mut fallback_field = fallback_field.into();
+
+        if fallback_field.is_empty() {
+            fallback_field = "misc";
+        }
+
+        LogglyDrainBuilder {
+            field_filter: filter,
+            fallback_field,
+            queue_max_size: self.queue_max_size,
+            batch_size: self.batch_size,
+            sender_count: self.sender_count,
+            token: self.token,
+            tag: self.tag,
+            request_timeout: self.request_timeout,
+            connector: self.connector,
+            debug: self.debug,
+        }
+    }
 
     /// Enable or disable debug mode (it's disabled by default).  In the debug
     /// mode you'll be able to see some runtime info on stderr that will help
     /// you with setting up the drain (e.g. failed requests). With debug mode
     /// disabled, all errors will be silently ignored.
-    pub fn debug_mode(mut self, enable: bool) -> LogglyDrainBuilder {
+    pub fn debug_mode(mut self, enable: bool) -> Self {
         self.debug = enable;
         self
     }
 
     /// Set a given maximum size of the message queue (the default is unlimited).
-    pub fn queue_max_size(mut self, size: usize) -> LogglyDrainBuilder {
+    pub fn queue_max_size(mut self, size: usize) -> Self {
         self.queue_max_size = Some(size);
         self
     }
@@ -147,32 +188,32 @@ impl LogglyDrainBuilder {
     /// Increasing batch size won't cause any delays in sending messages. If
     /// there is not enough messages in the internal queue to make a maximum
     /// size batch, a smaller batch is sent.
-    pub fn batch_size(mut self, size: usize) -> LogglyDrainBuilder {
+    pub fn batch_size(mut self, size: usize) -> Self {
         self.batch_size = size;
         self
     }
 
     /// Set the number of concurrent senders (the default is 16).
-    pub fn sender_count(mut self, count: usize) -> LogglyDrainBuilder {
+    pub fn sender_count(mut self, count: usize) -> Self {
         self.sender_count = count;
         self
     }
 
     /// Set Loggly request timeout (the default is 5 seconds).
-    pub fn request_timeout(mut self, timeout: Duration) -> LogglyDrainBuilder {
+    pub fn request_timeout(mut self, timeout: Duration) -> Self {
         self.request_timeout = Some(timeout);
         self
     }
 
     /// Use a given HttpsConnector. The connector is used only if the log
     /// message sender is spawned as a task.
-    pub fn connector(mut self, connector: HttpsConnector<HttpConnector>) -> LogglyDrainBuilder {
+    pub fn connector(mut self, connector: HttpsConnector<HttpConnector>) -> Self {
         self.connector = Some(connector);
         self
     }
 
     /// Build a Loggly drain.
-    pub fn build(self) -> Result<(LogglyDrain, LogglyMessageSender, FlushHandle), Error> {
+    pub fn build(self) -> Result<(LogglyDrain<F>, LogglyMessageSender, FlushHandle), Error> {
         let (tx, rx) = channel::new::<Bytes>(self.queue_max_size);
 
         let mut builder = LogglyClient::builder(&self.token, &self.tag);
@@ -192,7 +233,13 @@ impl LogglyDrainBuilder {
         );
 
         let fhandle = FlushHandle::new(tx.clone());
-        let drain = LogglyDrain::new(tx, self.debug);
+
+        let drain = LogglyDrain {
+            field_filter: self.field_filter,
+            fallback_field: self.fallback_field,
+            sender: Mutex::new(tx),
+            debug: self.debug,
+        };
 
         Ok((drain, sender, fhandle))
     }
@@ -200,7 +247,7 @@ impl LogglyDrainBuilder {
     /// Spawn a tokio task within the current executor context. The task will
     /// be responsible for sending all log messages.
     #[cfg(feature = "runtime")]
-    pub fn spawn_task(self) -> Result<(LogglyDrain, FlushHandle), Error> {
+    pub fn spawn_task(self) -> Result<(LogglyDrain<F>, FlushHandle), Error> {
         let (drain, sender, flush_handle) = self.build()?;
 
         tokio::spawn(sender);
@@ -210,7 +257,7 @@ impl LogglyDrainBuilder {
 
     /// Spawn a thread responsible for sending all log messages.
     #[cfg(feature = "runtime")]
-    pub fn spawn_thread(self) -> Result<(LogglyDrain, FlushHandle), Error> {
+    pub fn spawn_thread(self) -> Result<(LogglyDrain<F>, FlushHandle), Error> {
         let (drain, sender, flush_handle) = self.build()?;
 
         thread::spawn(move || {
@@ -228,32 +275,62 @@ impl LogglyDrainBuilder {
 }
 
 /// Loggly drain.
-pub struct LogglyDrain {
+pub struct LogglyDrain<F = AcceptAll> {
+    field_filter: F,
+    fallback_field: Key,
     sender: Mutex<Sender<Bytes>>,
     debug: bool,
 }
 
 impl LogglyDrain {
-    /// Create a new LogglyDrain.
-    fn new(sender: Sender<Bytes>, debug: bool) -> LogglyDrain {
-        LogglyDrain {
-            sender: Mutex::new(sender),
-            debug,
-        }
-    }
-
     /// Create a LogglyDrain builder for a given Loggly token and tag.
     pub fn builder(token: &str, tag: &str) -> LogglyDrainBuilder {
         LogglyDrainBuilder::new(token, tag)
     }
 }
 
-impl Drain for LogglyDrain {
+impl<F> LogglyDrain<F>
+where
+    F: KVFilter,
+{
+    /// Serialize a given log record.
+    fn serialize(&self, record: &Record, logger_values: &OwnedKVList) -> slog::Result<Bytes> {
+        let mut serializer = LogglyMessageSerializer::new()
+            .with_field_filter(self.fallback_field, &self.field_filter);
+
+        let level = record.level().as_str().to_lowercase();
+
+        let file = record.file();
+        let line = record.line();
+
+        serializer.emit_str("level", &level)?;
+        serializer.emit_arguments("file", &format_args!("{}:{}", file, line))?;
+        serializer.emit_arguments("message", record.msg())?;
+
+        logger_values.serialize(record, &mut serializer)?;
+
+        record.kv().serialize(record, &mut serializer)?;
+
+        let timestamp = Utc::now();
+
+        serializer.emit_str(
+            "timestamp",
+            &timestamp.to_rfc3339_opts(SecondsFormat::Micros, true),
+        )?;
+
+        serializer.finish()
+    }
+}
+
+impl<F> Drain for LogglyDrain<F>
+where
+    F: KVFilter,
+{
     type Ok = ();
     type Err = ();
 
     fn log(&self, record: &Record, logger_values: &OwnedKVList) -> Result<(), ()> {
-        let message = serialize(record, logger_values);
+        let message = self.serialize(record, logger_values);
 
         if let Ok(message) = message {
             let res = self.sender.lock().unwrap().send(message.clone());
@@ -277,35 +354,6 @@ impl Drain for LogglyDrain {
 
         Ok(())
     }
-}
-
-/// Serialize a given log record as as a Loggly JSON string.
-fn serialize(record: &Record, logger_values: &OwnedKVList) -> slog::Result<Bytes> {
-    let mut serializer = LogglyMessageSerializer::new();
-
-    let level = record.level().as_str().to_lowercase();
-
-    let file = record.file();
-    let line = record.line();
-
-    serializer.emit_str("level", &level)?;
-    serializer.emit_arguments("file", &format_args!("{}:{}", file, line))?;
-    serializer.emit_arguments("message", record.msg())?;
-
-    logger_values.serialize(record, &mut serializer)?;
-
-    record.kv().serialize(record, &mut serializer)?;
-
-    let timestamp = Utc::now();
-
-    serializer.emit_str(
-        "timestamp",
-        &timestamp.to_rfc3339_opts(SecondsFormat::Micros, true),
-    )?;
-
-    let message = serializer.finish()?;
-
-    Ok(message)
 }
 
 /// A flush handle that can be used to flush all currently queued log messages.
