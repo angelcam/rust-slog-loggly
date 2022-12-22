@@ -81,6 +81,7 @@ mod channel;
 mod client;
 mod error;
 mod serializer;
+mod retry;
 
 use std::{str, sync::Mutex, time::Duration};
 
