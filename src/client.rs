@@ -8,11 +8,7 @@ use std::{
 
 use bytes::Bytes;
 use futures::{FutureExt, Stream, StreamExt};
-use hyper::{
-    client::{Client, HttpConnector},
-    Request, Uri,
-};
-use hyper_tls::HttpsConnector;
+use reqwest::{Client, Url};
 
 use crate::{batch::BatchStream, channel::Message, error::Error};
 
@@ -25,7 +21,6 @@ pub struct LogglyClientBuilder {
     tag: String,
     request_timeout: Duration,
     debug: bool,
-    connector: Option<HttpsConnector<HttpConnector>>,
 }
 
 impl LogglyClientBuilder {
@@ -38,7 +33,6 @@ impl LogglyClientBuilder {
             tag: tag.to_string(),
             request_timeout,
             debug: false,
-            connector: None,
         }
     }
 
@@ -57,23 +51,12 @@ impl LogglyClientBuilder {
         self
     }
 
-    /// Use a given HttpsConnector.
-    pub fn connector(mut self, connector: HttpsConnector<HttpConnector>) -> LogglyClientBuilder {
-        self.connector = Some(connector);
-        self
-    }
-
     /// Create the LogglyClient.
     pub fn build(self) -> Result<LogglyClient, Error> {
-        let connector;
-
-        if let Some(c) = self.connector {
-            connector = c;
-        } else {
-            connector = HttpsConnector::new();
-        }
-
-        let client = Client::builder().build(connector);
+        let client = Client::builder()
+            .timeout(self.request_timeout)
+            .build()
+            .map_err(|err| Error::new(format!("unable to create an HTTP client: {err}")))?;
 
         let url = format!(
             "https://logs-01.loggly.com/bulk/{}/tag/{}/",
@@ -88,7 +71,6 @@ impl LogglyClientBuilder {
 
         let res = LogglyClient {
             url,
-            timeout: self.request_timeout,
             debug: self.debug,
             client,
         };
@@ -100,10 +82,9 @@ impl LogglyClientBuilder {
 /// Loggly client.
 #[derive(Clone)]
 pub struct LogglyClient {
-    url: Arc<Uri>,
-    timeout: Duration,
+    url: Arc<Url>,
     debug: bool,
-    client: Client<HttpsConnector<HttpConnector>>,
+    client: Client,
 }
 
 impl LogglyClient {
@@ -138,13 +119,7 @@ impl LogglyClient {
 
     /// Try to send a given log message.
     pub async fn try_send(&self, msg: Bytes) -> Result<(), Error> {
-        let send = tokio::time::timeout(self.timeout, self.try_send_inner(msg));
-
-        let res = match send.await {
-            Ok(Ok(())) => Ok(()),
-            Ok(Err(err)) => Err(err),
-            Err(_) => Err(Error::new("request timeout")),
-        };
+        let res = self.try_send_inner(msg).await;
 
         if self.debug {
             if let Err(err) = res.as_ref() {
@@ -157,20 +132,21 @@ impl LogglyClient {
 
     /// Try to send a given log message.
     async fn try_send_inner(&self, msg: Bytes) -> Result<(), Error> {
-        let request = Request::post(&*self.url)
-            .header("Content-Type", "text/plain")
-            .body(msg.into())
-            .map_err(|_| Error::new("unable to create a request body"))?;
+        let url = &*self.url;
 
-        let res = self
+        let response = self
             .client
-            .request(request)
+            .post(url.clone())
+            .header("Content-Type", "text/plain")
+            .body(msg)
+            .send()
             .await
             .map_err(|err| Error::new(format!("unable to send a request: {}", err)))?;
 
-        let status = res.status();
+        let status = response.status();
 
-        let body = hyper::body::to_bytes(res.into_body())
+        let body = response
+            .bytes()
             .await
             .map_err(|err| Error::new(format!("unable to read a response body: {}", err)))?;
 

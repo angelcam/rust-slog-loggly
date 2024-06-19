@@ -16,26 +16,27 @@ keywords = ["logging", "slog", "loggly"]
 
 [features]
 default = ["http1", "runtime"]
-http1 = ["hyper/http1"]
-http2 = ["hyper/http2"]
+http1 = []
+http2 = ["reqwest/http2"]
 runtime = ["tokio/rt"]
 
 [dependencies]
 bytes       = "1"
 chrono      = "0.4"
 futures     = "0.3"
-hyper-tls   = "0.5"
 serde       = "1.0"
 serde_json  = "1.0"
 slog        = "2.5"
 
-[dependencies.hyper]
-version = "0.14"
-features = ["client", "tcp"]
+[dependencies.reqwest]
+version = "0.12"
+default-features = false
+features = ["default-tls"]
 
 [dependencies.tokio]
 version  = "1"
-features = ["time"]
+features = []
+optional = true
 
 [dev-dependencies.tokio]
 version    = "1"

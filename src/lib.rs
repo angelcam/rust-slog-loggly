@@ -89,8 +89,6 @@ use std::thread;
 
 use bytes::Bytes;
 use chrono::{SecondsFormat, Utc};
-use hyper::client::HttpConnector;
-use hyper_tls::HttpsConnector;
 use slog::{Drain, Key, OwnedKVList, Record, Serializer as SlogSerializer, KV};
 
 use crate::{channel::Sender, client::LogglyClient, serializer::LogglyMessageSerializer};
@@ -114,7 +112,6 @@ pub struct LogglyDrainBuilder<F = AcceptAll> {
     token: String,
     tag: String,
     request_timeout: Option<Duration>,
-    connector: Option<HttpsConnector<HttpConnector>>,
     debug: bool,
 }
 
@@ -130,7 +127,6 @@ impl LogglyDrainBuilder {
             token: token.to_string(),
             tag: tag.to_string(),
             request_timeout: None,
-            connector: None,
             debug: false,
         }
     }
@@ -163,7 +159,6 @@ impl<F> LogglyDrainBuilder<F> {
             token: self.token,
             tag: self.tag,
             request_timeout: self.request_timeout,
-            connector: self.connector,
             debug: self.debug,
         }
     }
@@ -205,13 +200,6 @@ impl<F> LogglyDrainBuilder<F> {
         self
     }
 
-    /// Use a given HttpsConnector. The connector is used only if the log
-    /// message sender is spawned as a task.
-    pub fn connector(mut self, connector: HttpsConnector<HttpConnector>) -> Self {
-        self.connector = Some(connector);
-        self
-    }
-
     /// Build a Loggly drain.
     pub fn build(self) -> Result<(LogglyDrain<F>, LogglyMessageSender, FlushHandle), Error> {
         let (tx, rx) = channel::new::<Bytes>(self.queue_max_size);
@@ -220,10 +208,6 @@ impl<F> LogglyDrainBuilder<F> {
 
         if let Some(timeout) = self.request_timeout {
             builder = builder.request_timeout(timeout);
-        }
-
-        if let Some(connector) = self.connector {
-            builder = builder.connector(connector);
         }
 
         let sender = builder.debug_mode(self.debug).build()?.send_all(
