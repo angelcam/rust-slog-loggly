@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.6.0 (2024-06-19)
+
+* Use the reqwest HTTP client instead of plain Hyper
+
 ## v0.5.1 (2022-12-13)
 
 * Remove thread-local string buffers and add key-value filtering
